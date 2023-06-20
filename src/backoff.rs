@@ -6,19 +6,21 @@ use tracing::info;
 /// Exponential backoff with jitter
 ///
 /// See <https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/>
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct BackoffConfig {
     pub init_backoff: Duration,
     pub max_backoff: Duration,
     pub base: f64,
+    pub max_retry: usize,
 }
 
 impl Default for BackoffConfig {
     fn default() -> Self {
         Self {
             init_backoff: Duration::from_millis(100),
-            max_backoff: Duration::from_secs(500),
+            max_backoff: Duration::from_secs(5),
             base: 3.,
+            max_retry: 5,
         }
     }
 }
@@ -26,7 +28,7 @@ impl Default for BackoffConfig {
 // TODO: Currently, retrying can't fail, but there should be a global maximum timeout that
 // causes an error if the total time retrying exceeds that amount.
 // See https://github.com/influxdata/rskafka/issues/65
-pub type BackoffError = std::convert::Infallible;
+pub type BackoffError = Box<dyn std::error::Error + Send + Sync>;
 pub type BackoffResult<T> = Result<T, BackoffError>;
 
 /// Error (which should increase backoff) or throttle for a specific duration (as asked for by the broker).
@@ -49,6 +51,8 @@ pub struct Backoff {
     max_backoff_secs: f64,
     base: f64,
     rng: Option<Box<dyn RngCore + Sync + Send>>,
+    retry_count: usize,
+    max_retry: usize,
 }
 
 impl std::fmt::Debug for Backoff {
@@ -58,6 +62,7 @@ impl std::fmt::Debug for Backoff {
             .field("next_backoff_secs", &self.next_backoff_secs)
             .field("max_backoff_secs", &self.max_backoff_secs)
             .field("base", &self.base)
+            .field("max_retry", &self.max_retry)
             .finish()
     }
 }
@@ -82,6 +87,8 @@ impl Backoff {
             max_backoff_secs: config.max_backoff.as_secs_f64(),
             base: config.base,
             rng,
+            retry_count: 0,
+            max_retry: config.max_retry,
         }
     }
 
@@ -113,6 +120,11 @@ impl Backoff {
         E: std::error::Error + Send,
     {
         loop {
+            if self.retry_count > self.max_retry {
+                break Err(format!(
+                    "max retry count exceeded, retry_count:{}, max_retry:{}, request {request_name}", self.retry_count, self.max_retry).into());
+            }
+
             // split match statement from `tokio::time::sleep`, because otherwise rustc requires `B: Send`
             let sleep_time = match do_stuff().await {
                 ControlFlow::Break(r) => {
@@ -135,6 +147,7 @@ impl Backoff {
             };
 
             tokio::time::sleep(sleep_time).await;
+            self.retry_count += 1;
         }
     }
 }
@@ -154,6 +167,7 @@ mod tests {
             init_backoff: Duration::from_secs_f64(init_backoff_secs),
             max_backoff: Duration::from_secs_f64(max_backoff_secs),
             base,
+            ..Default::default()
         };
 
         let assert_fuzzy_eq = |a: f64, b: f64| assert!((b - a).abs() < 0.0001, "{} != {}", a, b);

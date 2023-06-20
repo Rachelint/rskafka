@@ -18,6 +18,7 @@
 )]
 
 mod backoff;
+pub use backoff::BackoffConfig;
 
 pub mod build_info;
 

@@ -3,6 +3,7 @@ use std::sync::Arc;
 use thiserror::Error;
 
 use crate::{
+    backoff::BackoffConfig,
     build_info::DEFAULT_CLIENT_ID,
     client::partition::PartitionClient,
     connection::{BrokerConnector, MetadataLookupMode, TlsConfig},
@@ -43,6 +44,7 @@ pub struct ClientBuilder {
     max_message_size: usize,
     socks5_proxy: Option<String>,
     tls_config: TlsConfig,
+    backoff_config: Option<BackoffConfig>,
 }
 
 impl ClientBuilder {
@@ -54,6 +56,7 @@ impl ClientBuilder {
             max_message_size: 100 * 1024 * 1024, // 100MB
             socks5_proxy: None,
             tls_config: TlsConfig::default(),
+            backoff_config: None,
         }
     }
 
@@ -70,6 +73,11 @@ impl ClientBuilder {
     /// failures all over the place since metadata requests cannot be handled any longer.
     pub fn max_message_size(mut self, max_message_size: usize) -> Self {
         self.max_message_size = max_message_size;
+        self
+    }
+
+    pub fn backoff_config(mut self, backoff_config: BackoffConfig) -> Self {
+        self.backoff_config = Some(backoff_config);
         self
     }
 
@@ -99,7 +107,10 @@ impl ClientBuilder {
         ));
         brokers.refresh_metadata().await?;
 
-        Ok(Client { brokers })
+        Ok(Client {
+            brokers,
+            backoff_config: self.backoff_config.unwrap_or_default(),
+        })
     }
 }
 
@@ -118,6 +129,7 @@ impl std::fmt::Debug for ClientBuilder {
 #[derive(Debug)]
 pub struct Client {
     brokers: Arc<BrokerConnector>,
+    backoff_config: BackoffConfig,
 }
 
 impl Client {
@@ -138,6 +150,7 @@ impl Client {
             partition,
             Arc::clone(&self.brokers),
             unknown_topic_handling,
+            self.backoff_config.clone(),
         )
         .await
     }

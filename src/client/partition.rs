@@ -143,12 +143,13 @@ impl PartitionClient {
         partition: i32,
         brokers: Arc<BrokerConnector>,
         unknown_topic_handling: UnknownTopicHandling,
+        backoff_config: BackoffConfig,
     ) -> Result<Self> {
         let p = Self {
             topic,
             partition,
             brokers: Arc::clone(&brokers),
-            backoff_config: Default::default(),
+            backoff_config,
             current_broker: Mutex::new(CurrentBroker {
                 broker: None,
                 gen_broker: BrokerCacheGeneration::START,
